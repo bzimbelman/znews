@@ -1,0 +1,92 @@
+name: Dependency Security Audit
+
+on:
+  schedule:
+    - cron: "0 2 * * 1" # Run weekly on Mondays at 2 AM
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  audit-npm:
+    name: Audit NPM Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+      - name: Run npm audit
+        run: pnpm audit --audit-level moderate
+      - name: Generate vulnerability report
+        if: failure()
+        run: pnpm audit --json --audit-level moderate > audit-report.json
+      - name: Upload vulnerability report
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: npm-audit-report
+          path: audit-report.json
+
+  audit-go:
+    name: Audit Go Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Run Go vulnerability scan
+        run: |
+          cd apps/crawler
+          go install github.com/securecodewarrior/go-seccomp-benchmark-fix/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: Generate Go vulnerability report
+        if: failure()
+        run: |
+          cd apps/crawler
+          govulncheck ./... -json > go-vuln-report.json
+      - name: Upload Go vulnerability report
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: go-vuln-report
+          path: apps/crawler/go-vuln-report.json
+
+  audit-python:
+    name: Audit Python Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: "**/requirements.txt"
+      - name: Install Python security tools
+        run: |
+          pip install safety bandit pip-audit
+      - name: Run safety check
+        run: |
+          cd apps/discovery-service
+          safety check --json > safety-report.json || true
+      - name: Run bandit security scan
+        run: |
+          cd apps/discovery-service
+          bandit -r . -f json -o bandit-report.json || true
+      - name: Run pip audit
+        run: |
+          cd apps/discovery-service
+          pip-audit --json > pip-audit-report.json || true
+      - name: Upload Python security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: python-security-reports
+          path: |
+            apps/discovery-service/safety-report.json
+            apps/discovery-service/bandit-report.json
+            apps/discovery-service/pip-audit-report.json

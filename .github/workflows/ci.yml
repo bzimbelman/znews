@@ -1,0 +1,253 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: "18"
+  GO_VERSION: "1.21"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # Quality checks (run in parallel)
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+      - name: Run TypeScript linting
+        run: pnpm lint
+      - name: Run Go linting
+        run: |
+          cd apps/crawler
+          go vet ./...
+          golangci-lint run
+      - name: Run Python linting
+        run: |
+          cd apps/discovery-service
+          python -m flake8 .
+          python -m black --check .
+
+  # Test jobs (run in parallel)
+  test-feed-service:
+    name: Test Feed Service
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        node-version: [18, 20]
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: znews
+          POSTGRES_PASSWORD: znews_password
+          POSTGRES_DB: znews_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: znews
+          RABBITMQ_DEFAULT_PASS: znews_password
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+          cache-dependency-path: "**/pnpm-lock.yaml"
+      - name: Install dependencies
+        run: pnpm install
+      - name: Wait for databases to be ready
+        run: |
+          until docker-compose exec -T postgres pg_isready -U znews -d znews_test; do sleep 5; done
+          until docker-compose exec -T redis redis-cli ping; do sleep 5; done
+          until docker-compose exec -T rabbitmq rabbitmq-diagnostics -q ping; do sleep 5; done
+      - name: Run tests
+        run: pnpm test:feed-service
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://znews:znews_password@localhost:5432/znews_test
+          REDIS_URL: redis://localhost:6379
+          RABBITMQ_URL: amqp://znews:znews_password@localhost:5672/znews
+
+  test-crawler:
+    name: Test Crawler Service
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install Go dependencies
+        run: |
+          cd apps/crawler
+          go mod download
+          go mod tidy
+      - name: Run tests
+        run: |
+          cd apps/crawler
+          go test -v -coverprofile=coverage.out ./...
+          go tool cover -html=coverage.out -o coverage.html
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./apps/crawler/coverage.out
+          flags: crawler
+          name: crawler-coverage
+
+  test-discovery-service:
+    name: Test Discovery Service
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11]
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: znews
+          POSTGRES_PASSWORD: znews_password
+          POSTGRES_DB: znews_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: "**/requirements.txt"
+      - name: Install Python dependencies
+        run: |
+          cd apps/discovery-service
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-xdist
+      - name: Wait for databases to be ready
+        run: |
+          until docker-compose exec -T postgres pg_isready -U znews -d znews_test; do sleep 5; done
+          until docker-compose exec -T redis redis-cli ping; do sleep 5; done
+      - name: Run tests
+        run: |
+          cd apps/discovery-service
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=html
+        env:
+          DATABASE_URL: postgresql://znews:znews_password@localhost:5432/znews_test
+          REDIS_URL: redis://localhost:6379
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./apps/discovery-service/coverage.xml
+          flags: discovery
+          name: discovery-coverage
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test-feed-service, test-crawler, test-discovery-service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+      - name: Install dependencies
+        run: pnpm install
+      - name: Start services
+        run: docker-compose up -d
+      - name: Wait for services
+        run: sleep 30
+      - name: Run integration tests
+        run: pnpm test:integration
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://znews:znews_password@localhost:5432/znews_test
+          REDIS_URL: redis://localhost:6379
+          RABBITMQ_URL: amqp://znews:znews_password@localhost:5672/znews
+
+  build:
+    name: Build Applications
+    runs-on: ubuntu-latest
+    needs:
+      [
+        test-feed-service,
+        test-crawler,
+        test-discovery-service,
+        test-integration,
+      ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+      - name: Build all applications
+        run: pnpm build
+      - name: Build Docker images
+        run: |
+          docker-compose build
+          docker-compose build --no-cache
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: |
+            apps/*/dist
+            apps/*/bin
+            apps/*/coverage
+          retention-days: 30

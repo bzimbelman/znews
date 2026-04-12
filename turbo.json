@@ -1,9 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "tasks": {
+  "globalDependencies": ["**/.env.*local"],
+  "pipeline": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "bin/**"]
     },
     "dev": {
       "cache": false,
@@ -14,14 +15,56 @@
     },
     "test": {
       "dependsOn": ["build"],
-      "outputs": ["coverage/**"],
+      "outputs": ["coverage/**", "test-results/**"],
+      "passThroughEnv": [
+        "NODE_ENV",
+        "CI",
+        "TEST_DATABASE_URL",
+        "REDIS_URL",
+        "RABBITMQ_URL",
+        "PYTHONPATH"
+      ],
+      "cache": true,
+      "cacheKey": "test-${{branch}}-${{hashFiles('**/package.json','**/go.mod','**/pyproject.toml')}}"
+    },
+    "test:feed-service": {
+      "dependsOn": ["build"],
+      "outputs": ["coverage/**", "test-results/**"],
       "passThroughEnv": [
         "NODE_ENV",
         "CI",
         "TEST_DATABASE_URL",
         "REDIS_URL",
         "RABBITMQ_URL"
-      ]
+      ],
+      "cache": true,
+      "cacheKey": "test-feed-${{branch}}-${{hashFiles('apps/feed-service/**/package.json')}}"
+    },
+    "test:crawler": {
+      "dependsOn": ["build"],
+      "outputs": ["coverage/**", "test-results/**"],
+      "passThroughEnv": ["CI", "GO_ENV"],
+      "cache": true,
+      "cacheKey": "test-crawler-${{branch}}-${{hashFiles('apps/crawler/go.mod')}}"
+    },
+    "test:discovery-service": {
+      "dependsOn": ["build"],
+      "outputs": ["coverage/**", "test-results/**"],
+      "passThroughEnv": ["CI", "PYTHONPATH"],
+      "cache": true,
+      "cacheKey": "test-discovery-${{branch}}-${{hashFiles('apps/discovery-service/pyproject.toml')}}"
+    },
+    "test:integration": {
+      "dependsOn": ["build"],
+      "outputs": ["test-results/**"],
+      "passThroughEnv": [
+        "NODE_ENV",
+        "CI",
+        "TEST_DATABASE_URL",
+        "REDIS_URL",
+        "RABBITMQ_URL"
+      ],
+      "cache": false
     },
     "clean": {
       "cache": false
@@ -29,6 +72,26 @@
     "type-check": {
       "dependsOn": ["build"],
       "outputs": []
+    },
+    "security:audit": {
+      "outputs": ["audit-reports/**"],
+      "cache": false
+    }
+  },
+  "remote": {
+    "timeout": 600000,
+    "cache": {
+      "items": [
+        {
+          "name": "build-cache",
+          "key": "build-${{branch}}-${{hashFiles('**/package.json','**/go.mod','**/pyproject.toml')}}",
+          "versionedFiles": [
+            "**/package-lock.json",
+            "**/pnpm-lock.yaml",
+            "**/go.sum"
+          ]
+        }
+      ]
     }
   }
 }

@@ -1,0 +1,47 @@
+FROM node:18-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Install dependencies based on the preferred package manager
+COPY package.json pnpm-lock.yaml* ./
+COPY apps/feed-service/package.json apps/feed-service/pnpm-lock.yaml* apps/feed-service/
+COPY apps/discovery-service/pyproject.toml apps/discovery-service/requirements.txt apps/discovery-service/
+COPY apps/crawler/go.mod apps/crawler/go.sum apps/crawler/
+
+RUN npm install -g pnpm && \
+    pnpm install --frozen-lockfile
+
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/feed-service/node_modules ./apps/feed-service/node_modules
+
+COPY . .
+
+# Build feed service
+RUN pnpm build
+
+# Production image, copy all the files and run next
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nodejs
+
+COPY --from=builder /app/apps/feed-service/dist ./apps/feed-service/dist
+COPY --from=builder /app/apps/feed-service/package.json ./apps/feed-service/package.json
+COPY --from=builder /app/apps/discovery-service ./apps/discovery-service
+COPY --from=builder /app/apps/crawler ./apps/crawler
+
+USER nodejs
+
+EXPOSE 3000
+
+CMD ["node", "apps/feed-service/dist/main.js"]
