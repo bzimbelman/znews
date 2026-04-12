@@ -1,0 +1,89 @@
+version: "3.8"
+
+services:
+  # Override and extend the base docker-compose.yml for local development
+
+  # Feed service local development
+  feed-service:
+    build:
+      context: ./apps/feed-service
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: ${TEST_DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/feed-service:/app
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    profiles:
+      - dev
+
+  # Discovery service local development
+  discovery-service:
+    build:
+      context: ./apps/discovery-service
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHON_ENV: development
+      DATABASE_URL: ${TEST_DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/discovery-service:/app
+      - /app/__pycache__
+      - /app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - dev
+
+  # Crawler service local development
+  crawler-service:
+    build:
+      context: ./apps/crawler
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    environment:
+      GO_ENV: development
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/crawler:/app
+      - /app/bin
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    profiles:
+      - dev
+
+  # Add hot-reload for frontend when ready
+  # frontend:
+  #   build:
+  #     context: ./apps/frontend
+  #     dockerfile: Dockerfile.dev
+  #   ports:
+  #     - "9000:9000"
+  #   volumes:
+  #     - ./apps/frontend:/app
+  #     - /app/node_modules
+  #     - /app/dist
+  #   profiles:
+  #     - dev

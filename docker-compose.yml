@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  # PostgreSQL database for feed and user services
+  postgres:
+    image: postgres:15-alpine
+    container_name: znews-postgres
+    environment:
+      POSTGRES_USER: znews
+      POSTGRES_PASSWORD: znews_password
+      POSTGRES_DB: znews_test
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U znews -d znews_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and message broker
+  redis:
+    image: redis:7-alpine
+    container_name: znews-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # RabbitMQ for message queuing
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: znews-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: znews
+      RABBITMQ_DEFAULT_PASS: znews_password
+      RABBITMQ_DEFAULT_VHOST: znews
+    ports:
+      - "5673:5672" # AMQP port
+      - "15673:15672" # Management UI port
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # pgAdmin for PostgreSQL management (optional)
+  pgadmin:
+    image: dpage/pgadmin4:7-alpine
+    container_name: znews-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@znews.local
+      PGADMIN_DEFAULT_PASSWORD: admin_password
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+
+networks:
+  znews-network:
+    driver: bridge
