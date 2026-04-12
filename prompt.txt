@@ -1,0 +1,36 @@
+I'm very leary of hosted services. I want to be able to run everything locally. Any service that
+does not accomodate local only development, and at a minimum self hosted as a backup to the 
+hosted version, I don't think I want to consider. 
+As for scaling up, I believe we will likely use k8s based services when we scale up, not 
+serverless.
+We can use keycloak or similar for auth and host our own. 
+
+Some questions from the tech-stack document:
+1. What do we need pgvector for? Are you expecting a RAG implementation for the discover 
+system? 
+2. What are we using R2 for? 
+3. What are we planning on using ONNX runtime for? Are we thinking we are building into 
+the discovery system it's own ai tool instead of using a LLM? If so, I want to understand 
+the tradeoff there. I'm not opposed to this, just asking for justification and reasoning 
+behind this/these decisions. 
+4. Lets talk about nats as the job queue/scheduler/processing buss. Why did you choose 
+this over some other options. What is the visibility into this queue? How do we get 
+notifications of issues/failed jobs/etc? Compare this with other more traditional 
+job queuing sysetms like bullmq, airflow, kafka or rabbit mq based systems for me. 
+Again, not disputing your design, just trying to understand some of these decisions.
+5. Looking at the node service you defined, it appears that we could also use nestjs
+for this and get most of this in an integrated service. What are the tradeoffs between
+this approach and a nestjs or similar service?
+6. Is the go service able to handle javascript in the pages it views?
+7. I'm not a fan of NX, I'm ok with turborepo if it supports go and python as well as ts 
+based systems.
+8. Is the ts app running on cloudflare or what is running on cloudflare? What are we doing
+specifically in the cdn, just routing or some sort of caching? What is being cached there?
+
+
+export OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=8192
+
+Please read the documents in the docs/ directory and create an implementation plan to implement 
+the poc of this app. Please make sure the implementation plan knows that all implementations 
+should be done using test driven development. Please write the implementation plan to 
+docs/implementation-plan.md and make it a checklist so the implementation agents can keep it up to date.

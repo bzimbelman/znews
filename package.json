@@ -1,0 +1,25 @@
+{
+  "name": "znews",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && pnpm store prune",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "dep:check": "pnpm why",
+    "dep:outdated": "pnpm outdated",
+    "dep:update": "pnpm update",
+    "workspace:build": "pnpm -r run build",
+    "workspace:test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "turbo": "latest",
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@8.15.0"
+}
