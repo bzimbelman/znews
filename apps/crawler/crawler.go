@@ -687,7 +687,7 @@ func (c *JSCrawler) crawlSingle(ctx context.Context, urlStr string) ([]Article, 
 	if c.config.WaitForSelector != "" {
 		waitCtx, cancelWait := context.WithTimeout(pageCtx, c.config.WaitTimeout)
 		defer cancelWait()
-		page.Timeout(c.config.WaitTimeout).MustWaitLoad().MustElementR(c.config.WaitForSelector, "")
+		page.Timeout(c.config.WaitTimeout).MustWaitLoad().MustElement(c.config.WaitForSelector)
 		_ = waitCtx
 	} else {
 		page.MustWaitLoad()
