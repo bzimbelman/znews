@@ -42,30 +42,30 @@ func TestArticleExtraction(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "Test Article", article.Title)
 		assert.Contains(t, article.Content, "This is the article content")
-		assert.Equal(t, "https://example.com/article", article.URL)
+		assert.Equal(t, "https://example.com/article", article.SourceURL)
 	})
 }
 
 func TestDeduplication(t *testing.T) {
 	t.Run("Duplicate article detection", func(t *testing.T) {
 		article1 := Article{
-			URL:   "https://example.com/article",
-			Title: "Test Article",
+			SourceURL: "https://example.com/article",
+			Title:     "Test Article",
 		}
 
 		article2 := Article{
-			URL:   "https://example.com/article",
-			Title: "Different Title",
+			SourceURL: "https://example.com/article",
+			Title:     "Different Title",
 		}
 
 		article3 := Article{
-			URL:   "https://example.com/different",
-			Title: "Different Article",
+			SourceURL: "https://example.com/different",
+			Title:     "Different Article",
 		}
 
 		duplicates := findDuplicates([]Article{article1, article2, article3})
 
 		assert.Len(t, duplicates, 1)
-		assert.Equal(t, "https://example.com/article", duplicates[0].URL)
+		assert.Equal(t, "https://example.com/article", duplicates[0].SourceURL)
 	})
 }
