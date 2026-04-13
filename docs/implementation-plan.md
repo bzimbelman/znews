@@ -44,7 +44,7 @@
 
 - [x] Write tests for static crawler (Colly/goquery) with mock HTTP responses ✅
 - [x] Implement static crawler to pass tests ✅
-- [ ] Write tests for JS crawler (Rod) with browser pool management
+- [x] Write tests for JS crawler (Rod) with browser pool management ✅
 - [ ] Implement JS crawler to pass tests
 - [ ] Write tests for content processor (deduplication, paywall detection)
 - [ ] Implement processor to pass tests
@@ -124,5 +124,15 @@
 - URL-based deduplication
 - Proper error handling and graceful degradation
 - All tests passing with 100% coverage on basic functionality
+
+**JS Crawler Tests (Rod with browser pool management)**:
+
+- Comprehensive test suite for JavaScript-enabled crawler
+- Browser pool management with concurrent browser acquisition and release
+- Tests for browser pool configuration and validation
+- Tests for concurrent browser operations
+- Tests for browser pool cleanup and resource management
+- Tests for JavaScript content extraction and error handling
+- All tests passing with proper browser lifecycle management
 
 _Checklist maintained per TDD principle: Tests written before implementation_

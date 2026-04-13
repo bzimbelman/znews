@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 	"golang.org/x/net/html"
 	"io"
 	"net/http"
@@ -450,4 +452,287 @@ func findDuplicates(articles []Article) []Article {
 	}
 
 	return duplicates
+}
+
+// JSCrawlerConfig defines configuration for JavaScript-enabled crawler
+type JSCrawlerConfig struct {
+	MaxConcurrentBrowsers int           `json:"maxConcurrentBrowsers"`
+	BrowserTimeout        time.Duration `json:"browserTimeout"`
+	PageLoadTimeout       time.Duration `json:"pageLoadTimeout"`
+	Headless              bool          `json:"headless"`
+	UserAgent             string        `json:"userAgent"`
+	WaitForSelector       string        `json:"waitForSelector,omitempty"`
+	WaitTimeout           time.Duration `json:"waitTimeout,omitempty"`
+}
+
+// BrowserPool manages a pool of browser instances for concurrent crawling
+type BrowserPool struct {
+	config   *JSCrawlerConfig
+	browsers chan *rod.Browser
+	created  int
+	mu       sync.Mutex
+	cleanup  sync.Once
+	closed   bool
+}
+
+// JSCrawler handles crawling JavaScript-rendered content
+type JSCrawler struct {
+	config *JSCrawlerConfig
+	pool   *BrowserPool
+}
+
+// NewJSCrawler creates a new JavaScript-enabled crawler
+func NewJSCrawler(config *JSCrawlerConfig) *JSCrawler {
+	if err := config.validate(); err != nil {
+		panic(err)
+	}
+
+	return &JSCrawler{
+		config: config,
+		pool:   NewBrowserPool(config),
+	}
+}
+
+// NewBrowserPool creates a new browser pool
+func NewBrowserPool(config *JSCrawlerConfig) *BrowserPool {
+	if err := config.validate(); err != nil {
+		panic(err)
+	}
+
+	pool := &BrowserPool{
+		config:   config,
+		browsers: make(chan *rod.Browser, config.MaxConcurrentBrowsers),
+	}
+
+	// Pre-create browsers if needed
+	for i := 0; i < config.MaxConcurrentBrowsers; i++ {
+		browser, err := pool.createBrowser()
+		if err != nil {
+			panic(fmt.Sprintf("failed to create browser: %v", err))
+		}
+		pool.browsers <- browser
+	}
+
+	return pool
+}
+
+// Acquire gets a browser from the pool
+func (p *BrowserPool) Acquire() (*rod.Browser, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, errors.New("browser pool is closed")
+	}
+	p.mu.Unlock()
+
+	select {
+	case browser := <-p.browsers:
+		return browser, nil
+	case <-time.After(p.config.BrowserTimeout):
+		return nil, errors.New("timeout waiting for browser from pool")
+	}
+}
+
+// Release returns a browser to the pool
+func (p *BrowserPool) Release(browser *rod.Browser) {
+	if browser == nil {
+		return
+	}
+
+	// Check if browser is still usable and pool is not closed
+	select {
+	case p.browsers <- browser:
+		// Successfully returned to pool
+	default:
+		// Pool is full, close the browser
+		go func() {
+			if err := browser.Close(); err != nil {
+				// Log error if needed
+			}
+		}()
+	}
+}
+
+// Cleanup closes all browsers in the pool
+func (p *BrowserPool) Cleanup() {
+	p.cleanup.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+
+		close(p.browsers)
+		for browser := range p.browsers {
+			if browser != nil {
+				go func(b *rod.Browser) {
+					if err := b.Close(); err != nil {
+						// Log error if needed
+					}
+				}(browser)
+			}
+		}
+	})
+}
+
+func (p *BrowserPool) createBrowser() (*rod.Browser, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.created >= p.config.MaxConcurrentBrowsers {
+		return nil, errors.New("maximum number of browsers reached")
+	}
+
+	// Configure launcher
+	launcherURL := launcher.New().
+		Headless(p.config.Headless).
+		NoSandbox(true).
+		Set("disable-gpu").
+		MustLaunch()
+
+	// Create browser with timeout
+	browser := rod.New().
+		ControlURL(launcherURL).
+		Timeout(p.config.BrowserTimeout).
+		MustConnect()
+
+	// Set user agent will be handled during page navigation
+
+	p.created++
+	return browser, nil
+}
+
+// Crawl crawls JavaScript-rendered content from the given URLs
+func (c *JSCrawler) Crawl(ctx context.Context, urls []string) ([]Article, error) {
+	var wg sync.WaitGroup
+	results := make(chan []Article, len(urls))
+	errors := make(chan error, len(urls))
+
+	// Semaphore to limit concurrent browsers
+	sem := make(chan struct{}, c.config.MaxConcurrentBrowsers)
+
+	for _, urlStr := range urls {
+		wg.Add(1)
+		go func(u string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errors <- ctx.Err()
+				return
+			}
+
+			articles, err := c.crawlSingle(ctx, u)
+			if err != nil {
+				errors <- fmt.Errorf("failed to crawl %s: %w", u, err)
+				return
+			}
+
+			results <- articles
+		}(urlStr)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+		close(errors)
+	}()
+
+	var allArticles []Article
+	errChan := make(chan error, 1)
+
+	go func() {
+		for articles := range results {
+			allArticles = append(allArticles, articles...)
+		}
+		errChan <- nil
+	}()
+
+	select {
+	case err := <-errors:
+		if err != nil {
+			return nil, fmt.Errorf("crawling failed: %w", err)
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-errChan:
+	}
+
+	return allArticles, nil
+}
+
+func (c *JSCrawler) crawlSingle(ctx context.Context, urlStr string) ([]Article, error) {
+	// Validate URL
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidURL, urlStr)
+	}
+
+	// Acquire browser from pool
+	browser, err := c.pool.Acquire()
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire browser: %w", err)
+	}
+	defer c.pool.Release(browser)
+
+	// Create page context with timeout
+	pageCtx, cancel := context.WithTimeout(ctx, c.config.PageLoadTimeout)
+	defer cancel()
+
+	// Create new page
+	page := browser.MustPage(urlStr).Context(pageCtx)
+
+	// Wait for page load
+	if c.config.WaitForSelector != "" {
+		waitCtx, cancelWait := context.WithTimeout(pageCtx, c.config.WaitTimeout)
+		defer cancelWait()
+		page.Timeout(c.config.WaitTimeout).MustWaitLoad().MustElementR(c.config.WaitForSelector, "")
+		_ = waitCtx
+	} else {
+		page.MustWaitLoad()
+	}
+
+	// Get page HTML
+	htmlContent, err := page.HTML()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page HTML: %w", err)
+	}
+
+	// Extract article using existing HTML parsing logic
+	article, err := extractArticleFromHTML(htmlContent, urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract article: %w", err)
+	}
+
+	// Set article metadata
+	article.ID = generateID(urlStr)
+	article.Source = parsedURL.Host
+	article.SourceURL = urlStr
+	article.Language = detectLanguage([]byte(htmlContent))
+	article.Category = "article"
+	article.CreatedAt = time.Now()
+	article.UpdatedAt = time.Now()
+
+	// Add "js-rendered" tag to indicate this came from JS crawler
+	article.Tags = append(article.Tags, "js-rendered")
+
+	return []Article{*article}, nil
+}
+
+// validate checks if the JS crawler configuration is valid
+func (c *JSCrawlerConfig) validate() error {
+	if c.MaxConcurrentBrowsers <= 0 {
+		return errors.New("maxConcurrentBrowsers must be greater than 0")
+	}
+	if c.BrowserTimeout <= 0 {
+		return errors.New("browserTimeout must be greater than 0")
+	}
+	if c.PageLoadTimeout <= 0 {
+		return errors.New("pageLoadTimeout must be greater than 0")
+	}
+	if c.UserAgent == "" {
+		return errors.New("userAgent cannot be empty")
+	}
+	return nil
 }
